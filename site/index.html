@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#05090f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>SatRadar</title>
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%2305090f' stroke='%2334d399' stroke-width='2'/%3E%3Cpath d='M16 16 L27 9' stroke='%2334d399' stroke-width='2'/%3E%3Ccircle cx='22' cy='12' r='2.5' fill='%23fbbf24'/%3E%3C/svg%3E">
+</head>
+<body>
+  <header class="bar">
+    <div class="brand"><span class="dot"></span>SatRadar</div>
+    <div class="clock" id="clock">--:--:-- UTC</div>
+    <select id="filter" aria-label="Filter satellites">
+      <option value="all">All</option>
+      <option value="LEO">LEO</option>
+      <option value="MEO">MEO</option>
+      <option value="GEO">GEO</option>
+      <option value="HEO">HEO</option>
+      <option value="starlink">Starlink</option>
+      <option value="nostarlink">No Starlink</option>
+      <option value="stations">Stations</option>
+    </select>
+  </header>
+
+  <div id="map"></div>
+
+  <div class="legend" id="legend">
+    <span><i style="background:var(--leo)"></i>LEO</span>
+    <span><i style="background:var(--meo)"></i>MEO</span>
+    <span><i style="background:var(--geo)"></i>GEO</span>
+    <span><i style="background:var(--heo)"></i>HEO</span>
+    <span><i style="background:var(--old)"></i>Inactive</span>
+  </div>
+
+  <section class="sheet" id="sheet" data-state="half">
+    <button class="handle" id="handle" aria-label="Expand or collapse panel"><span></span></button>
+    <div class="card" id="card" hidden></div>
+    <nav class="tabs" id="tabs">
+      <button data-tab="close" class="on">Closest</button>
+      <button data-tab="slow">Slowest</button>
+      <button data-tab="oldest">Oldest</button>
+      <button data-tab="newest">Newest</button>
+      <button data-tab="over">Above me</button>
+      <button data-tab="find">Search</button>
+    </nav>
+    <div class="panel" id="panel"><p class="muted">Loading satellite data…</p></div>
+    <footer class="status" id="status"></footer>
+  </section>
+
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

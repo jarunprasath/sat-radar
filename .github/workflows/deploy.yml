@@ -1,0 +1,75 @@
+name: Build and deploy SatRadar
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"   # every 6 h; satradar.py itself never re-downloads data < 2 h old
+  workflow_dispatch:          # "Run workflow" button in the Actions tab
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Bundle satellite.js + Leaflet into site/vendor
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore CelesTrak cache from the previous run
+        uses: actions/cache/restore@v4
+        with:
+          path: cache
+          key: celestrak-${{ github.run_id }}
+          restore-keys: celestrak-
+
+      - name: Download (if stale) and build site data
+        run: python satradar.py build
+
+      - name: Save CelesTrak cache
+        if: always() && hashFiles('cache/*.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: cache
+          key: celestrak-${{ github.run_id }}
+
+      - name: Check JS propagation against Python
+        run: npm test
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

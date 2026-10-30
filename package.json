@@ -1,0 +1,14 @@
+{
+  "name": "sat-radar",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build/build-vendor.mjs",
+    "test": "node test/core.test.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10",
+    "leaflet": "1.9.4",
+    "satellite.js": "7.1.0"
+  }
+}
