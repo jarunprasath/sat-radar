@@ -367,7 +367,7 @@ function tick(force = false) {
   // lists refresh every 6 s (not every tick) so a tap on a row isn't lost to a re-render
   if (!typing && (force || now - (state.lastPanel || 0) > 6000)) { renderPanel(); state.lastPanel = now.getTime(); }
   const shown = state.visible.reduce((n, i) => n + sky.ok[i], 0);
-  $('status').textContent = `${shown.toLocaleString()} objects shown · elements ${ageText(state.data.gp_fetched)} old · data: CelesTrak`;
+  $('status').textContent = `${shown.toLocaleString()} objects shown · elements ${ageText(state.data.gp_fetched)} old · data: CelesTrak · © Arun Prasath J`;
 }
 
 setInterval(() => {

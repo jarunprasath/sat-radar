@@ -16,6 +16,8 @@ button, select, input { font: inherit; color: inherit; }
 .brand { font-weight: 700; letter-spacing: .04em; display: flex; align-items: center; gap: 8px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 0 #34d39980; animation: ping 2s infinite; }
 @keyframes ping { 70% { box-shadow: 0 0 0 10px #34d39900; } 100% { box-shadow: 0 0 0 0 #34d39900; } }
+.brand > div { line-height: 1.15; }
+.byline { font-size: 10px; font-weight: 500; letter-spacing: .02em; color: var(--muted); }
 .clock { font-family: var(--mono); color: var(--muted); font-size: 12px; margin-left: auto; }
 select, input[type=search] {
   background: #0f1a2a; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px;
