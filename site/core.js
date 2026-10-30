@@ -145,13 +145,14 @@ export class Sky {
     return out.slice(0, limit);
   }
 
-  // Ground track (list of [lat, lon]) from -back to +ahead minutes around now.
+  // Ground track: list of [lat, lon, timeMs] from -back to +ahead minutes around now.
   groundTrack(i, backMin, aheadMin, steps = 160) {
     const pts = [], t0 = this.time.getTime();
     for (let k = 0; k <= steps; k++) {
-      const t = new Date(t0 + (-backMin + (backMin + aheadMin) * k / steps) * 60000);
+      const ms = t0 + (-backMin + (backMin + aheadMin) * k / steps) * 60000;
+      const t = new Date(ms);
       const s = this._one(i, t, S.gstime(t));
-      if (s) pts.push([s.lat, s.lon]);
+      if (s) pts.push([s.lat, s.lon, ms]);
     }
     return pts;
   }

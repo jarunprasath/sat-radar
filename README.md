@@ -10,7 +10,7 @@ and prints a quick analysis.
 
 | Tab | What it means |
 |---|---|
-| **Map** | Every active satellite as a dot, coloured by orbit (LEO / MEO / GEO / HEO). Positions are recomputed in your browser every 2 s. Tap a dot for details and its ground track. |
+| **Map** | Every active satellite as a dot, coloured by orbit (LEO / MEO / GEO / HEO). Positions are recomputed in your browser every 2 s. Tap a dot for details, the country/ocean it is over now, and its path for the next orbit with UTC times (e.g. `21:28 Italy › 21:29 Austria`), also labelled on the map every 10 min. |
 | **Closest** | Pairs of satellites closest to each other in space right now (straight-line distance, < 50 km), refreshed every 10 s. Option to hide pairs from the same launch (Starlink batches etc.). |
 | **Slowest** | Speed of the point on Earth directly below each satellite. Geostationary satellites barely move ("parked"); higher orbits drift slowly. |
 | **Oldest / Newest** | By launch date (from the CelesTrak SATCAT). "Oldest" also includes the oldest payloads still in orbit, most of which are long dead (marked *inactive*). |
@@ -37,6 +37,8 @@ site/ (index.html + app.js + core.js)  ──►  your phone propagates all orbi
 * Propagation: SGP4 – [`satellite.js`](https://github.com/shashwatak/satellite-js) in the browser,
   [`sgp4`](https://pypi.org/project/sgp4/) in Python. `npm test` checks that both agree.
 * Map: [Leaflet](https://leafletjs.com) with © OpenStreetMap contributors tiles.
+* Country names: Natural Earth 1:50m outlines (public domain) via [world-atlas](https://github.com/topojson/world-atlas),
+  simplified to ~0.1° – border crossings and small islands are approximate; oceans/seas use rough boxes.
 
 ## One-time setup (GitHub Pages)
 

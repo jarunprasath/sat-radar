@@ -1,5 +1,6 @@
 // SatRadar UI - Leaflet map + canvas layer + bottom-sheet lists.
 import { loadCatalog, Sky } from './core.js';
+import { loadCountries, regionName, countriesReady } from './geo.js';
 
 const L = window.L;
 const $ = (id) => document.getElementById(id);
@@ -11,7 +12,7 @@ const STATION_RE = /\b(ISS|TIANGONG|CSS|TIANHE|WENTIAN|MENGTIAN)\b/i;
 const state = {
   sats: [], sky: null, data: null, report: null,
   filter: 'all', visible: [], tab: 'close',
-  selected: -1, pair: null, track: [],
+  selected: -1, pair: null, track: [], path: [], ticks: [],
   observer: null, skipSameLaunch: true, query: '',
   lastGround: 0, lastPairs: 0, pairs: [],
 };
@@ -82,6 +83,14 @@ function draw() {
       prev = w;
     }
     ctx.stroke(); ctx.setLineDash([]);
+    // time + place labels along the future track
+    ctx.font = '600 11px system-ui, sans-serif';
+    for (const tk of state.ticks) {
+      const p = map.latLngToContainerPoint([tk.lat, wrapLon(tk.lon, c)]);
+      ctx.fillStyle = '#34d399'; ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, 6.2832); ctx.fill();
+      ctx.fillStyle = '#e6edf5'; ctx.shadowColor = '#000'; ctx.shadowBlur = 4;
+      ctx.fillText(`${hhmm(tk.t)} ${tk.name}`, p.x + 6, p.y + 4); ctx.shadowBlur = 0;
+    }
   }
   // line between a selected pair
   if (state.pair) {
@@ -128,6 +137,7 @@ map.on('click', (ev) => {
 });
 
 // ---------------------------------------------------------------- helpers
+const hhmm = (t) => new Date(t).toISOString().slice(11, 16);
 const fmt = (n, d = 0) => Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: d, minimumFractionDigits: d }) : '–';
 const esc = (s) => String(s).replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
 
@@ -151,12 +161,39 @@ function select(i, fly = true, pair = null) {
   const half = Math.min(s.period / 2, 100);
   state.track = sky.groundTrack(i, half, half);
   state.trackAt = Date.now(); // re-computed every minute while selected (see tick)
+  computePath();
+  if (!countriesReady()) {
+    loadCountries().then(() => { computePath(); renderCard(); draw(); }).catch(() => {});
+  }
   if (fly && sky.ok[i]) map.flyTo([sky.lat[i], wrapLon(sky.lon[i], map.getCenter().lng)], Math.max(map.getZoom(), 3), { duration: 0.8 });
   renderCard(); draw();
 }
 
+// Upcoming path: where the satellite will be over (country / ocean) with UTC times.
+function computePath() {
+  const i = state.selected; if (i < 0) return;
+  const s = state.sats[i], sky = state.sky, now = sky.time.getTime();
+  state.path = []; state.ticks = [];
+  if (!sky.ok[i]) return;
+  if (s.period > 600) { // GEO and other high orbits: the point below hardly moves
+    state.path = [{ t: now, name: regionName(sky.lat[i], sky.lon[i]), lat: sky.lat[i], lon: sky.lon[i] }];
+    return;
+  }
+  const ahead = Math.min(s.period, 120);
+  const pts = sky.groundTrack(i, 0, ahead, Math.round(ahead * 3)); // one point every 20 s
+  let last = null;
+  for (const [la, lo, t] of pts) {
+    const name = regionName(la, lo);
+    if (name !== last) { state.path.push({ t, name, lat: la, lon: lo }); last = name; }
+  }
+  for (let k = 30; k < pts.length; k += 30) { // a map label every 10 minutes
+    const [la, lo, t] = pts[k];
+    state.ticks.push({ lat: la, lon: lo, t, name: regionName(la, lo) });
+  }
+}
+
 function clearSelection() {
-  state.selected = -1; state.pair = null; state.track = [];
+  state.selected = -1; state.pair = null; state.track = []; state.path = []; state.ticks = [];
   $('card').hidden = true; draw();
 }
 
@@ -164,21 +201,41 @@ function renderCard() {
   const i = state.selected; if (i < 0) return;
   const s = state.sats[i], k = state.sky;
   const card = $('card'); card.hidden = false;
+  const oldChips = card.querySelector('.chips');
+  const scrollX = oldChips ? oldChips.scrollLeft : 0;
   card.innerHTML = `
     <h3><span style="color:${s.active ? COLORS[s.cls] : COLORS.old}">●</span>${esc(s.name)}
       <button aria-label="Close" id="cardx">×</button></h3>
     <p class="note" style="margin:0 0 6px">NORAD ${s.norad} · ${esc(s.cospar)} · ${esc(s.owner || '?')} · launched ${esc(s.launch || '?')}${s.active ? '' : ' · inactive'}</p>
+    <p class="over">Now over ≈ <b>${esc(regionName(k.lat[i], k.lon[i]))}</b> <span class="muted">· ${new Date().toISOString().slice(11, 19)} UTC</span></p>
     <dl>
       <div><dt>Altitude</dt><dd>${fmt(k.alt[i])} km</dd></div>
       <div><dt>Orbital speed</dt><dd>${fmt(k.speed[i], 2)} km/s</dd></div>
       <div><dt>Over ground</dt><dd>${fmt(k.ground[i])} km/h</dd></div>
-      <div><dt>Lat / Lon</dt><dd>${fmt(k.lat[i], 2)}, ${fmt(k.lon[i], 2)}</dd></div>
+      <div><dt>Lat / Lon</dt><dd>${fmt(k.lat[i], 1)}, ${fmt(k.lon[i], 1)}</dd></div>
       <div><dt>Period</dt><dd>${fmt(s.period, 1)} min</dd></div>
       <div><dt>Orbit</dt><dd>${s.cls} · ${fmt(s.inc, 1)}°</dd></div>
     </dl>
+    ${pathHtml(s)}
     ${state.pair ? `<p class="note" style="margin:6px 0 0">Distance to ${esc(state.sats[state.pair[1]].name)}: <b>${fmt(k.distanceKm(state.pair[0], state.pair[1]), 2)} km</b></p>` : ''}`;
   $('cardx').onclick = clearSelection;
+  const chips = card.querySelector('.chips'); if (chips) chips.scrollLeft = scrollX;
 }
+
+function pathHtml(s) {
+  if (!state.path.length) return '';
+  if (s.period > 600) {
+    return `<p class="note" style="margin:6px 0 0">Stays over ≈ ${esc(state.path[0].name)} — ${s.cls === 'GEO' ? 'geostationary, it hardly moves over the ground' : 'very slow over the ground'}.</p>`;
+  }
+  const chips = state.path.map((p, k) =>
+    `<button class="chip" data-lat="${p.lat}" data-lon="${p.lon}"><b>${k ? hhmm(p.t) : 'now'}</b> ${esc(p.name)}</button>`).join('<span class="arr">›</span>');
+  return `<div class="path"><div class="path-h">Next ${fmt(Math.min(s.period, 120))} min · times in UTC · approximate</div><div class="chips">${chips}</div></div>`;
+}
+
+$('card').addEventListener('click', (e) => {
+  const c = e.target.closest('.chip'); if (!c) return;
+  map.flyTo([Number(c.dataset.lat), wrapLon(Number(c.dataset.lon), map.getCenter().lng)], Math.max(map.getZoom(), 3), { duration: 0.8 });
+});
 
 function row(i, val, sub, attrs = '') {
   const s = state.sats[i];

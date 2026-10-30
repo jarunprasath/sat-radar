@@ -30,4 +30,12 @@ assert.ok(Math.abs(sky.alt[n] - rep.newest[0].alt_km) < 30); // geodetic vs sphe
 const ov = sky.overhead(all, { lat: 49.87, lon: 8.65, h: 0.15 });
 console.log('overhead Darmstadt:', ov.length, ov.slice(0, 3).map(o => `${sats[o.i].name} el ${o.el.toFixed(1)}`));
 const tr = sky.groundTrack(n, 45, 45); assert.ok(tr.length > 100);
+// region lookup (country outlines are built by `npm run build`)
+const geo = await import('../site/geo.js');
+geo.setCountries(JSON.parse(readFileSync('site/vendor/countries.json', 'utf8')));
+assert.equal(geo.regionName(49.87, 8.65), 'Germany');
+assert.equal(geo.regionName(41.9, 12.5), 'Italy');
+assert.equal(geo.regionName(40.4, -3.7), 'Spain');
+assert.equal(geo.regionName(0, -30), 'Atlantic Ocean');
+assert.equal(geo.regionName(0, 520), 'Pacific Ocean'); // longitude wrap (520 = 160)
 console.log('OK');
