@@ -39,7 +39,7 @@ GP_ONE_URL = "https://celestrak.org/NORAD/elements/gp.php?CATNR={catnr}&FORMAT=c
 SATCAT_URL = "https://celestrak.org/pub/satcat.csv"
 USER_AGENT = "SatRadar/1.0 (+https://github.com/jarunprasath/sat-radar)"
 
-GP_MIN_AGE_S = 2 * 3600
+GP_MIN_AGE_S = 2 * 3600 - 15 * 60  # ~2 h; 15 min slack for GitHub's cron start jitter
 SATCAT_MIN_AGE_S = 20 * 3600
 N_OLDEST = 15
 

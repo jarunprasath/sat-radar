@@ -2,7 +2,7 @@ name: Build and deploy SatRadar
 
 on:
   schedule:
-    - cron: "23 */6 * * *"   # every 6 h; satradar.py itself never re-downloads data < 2 h old
+    - cron: "23 */2 * * *"   # every 2 h = CelesTrak's update rate; satradar.py never re-downloads data < 2 h old
   workflow_dispatch:          # "Run workflow" button in the Actions tab
   push:
     branches: [main]

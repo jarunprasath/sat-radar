@@ -29,7 +29,7 @@ Filters: All, LEO, MEO, GEO, HEO, Starlink, No Starlink, Stations.
 
 ```
 CelesTrak (GP elements, SATCAT)
-        │  every 6 h, GitHub Actions
+        │  every 2 h, GitHub Actions
         ▼
 satradar.py build ──► site/data/sats.json  (orbital elements + launch dates)
                   └─► site/data/report.json (Python snapshot analysis)
@@ -78,7 +78,7 @@ python -m http.server -d site 8000    # open http://localhost:8000
 
 CelesTrak is a free, donation-funded service with a strict
 [usage policy](https://celestrak.org/usage-policy.php). `satradar.py`:
-downloads GP data at most once per 2 h and SATCAT at most once per ~20 h, makes one attempt
+downloads GP data at most about once per 2 h and SATCAT at most once per ~20 h, makes one attempt
 per file with no retries, and stops downloading on any non-200 response (falling back to the
 cached data). Please keep it that way if you change the schedule.
 
