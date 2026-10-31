@@ -393,7 +393,7 @@ function startVisitorCounter() {
     const r = await fetch(`${base}/counter/${encodeURIComponent(path)}.json`);
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
-    if (!j || !j.count) throw new Error('no count');
+    if (!j || !j.count || j.count === '0') throw new Error('no count yet');
     return String(j.count);
   };
   const load = () => read('TOTAL').catch(() => read(location.pathname))
