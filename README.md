@@ -17,6 +17,12 @@ and prints a quick analysis.
 | **Above me** | Satellites more than 10° above your horizon, using your phone's location (stays in the browser). |
 | **Search** | By name or NORAD catalogue number. |
 
+Country names come with their flag emoji (🇩🇪 🇮🇹 🇮🇳 …). Windows desktop browsers show two letters (e.g. "DE") instead of flags; phones and Macs show flags.
+
+**Visitor counter:** optional, via [GoatCounter](https://www.goatcounter.com) (no cookies). Set your site code in
+[`site/config.js`](site/config.js) and enable *"Allow adding visitor counts on your website"* in GoatCounter's settings.
+Empty code = counter off. If the service is blocked or down, the count is simply hidden.
+
 Filters: All, LEO, MEO, GEO, HEO, Starlink, No Starlink, Stations.
 
 ## How it works
@@ -37,7 +43,7 @@ site/ (index.html + app.js + core.js)  ──►  your phone propagates all orbi
 * Propagation: SGP4 – [`satellite.js`](https://github.com/shashwatak/satellite-js) in the browser,
   [`sgp4`](https://pypi.org/project/sgp4/) in Python. `npm test` checks that both agree.
 * Map: [Leaflet](https://leafletjs.com) with © OpenStreetMap contributors tiles.
-* Country names: Natural Earth 1:50m outlines (public domain) via [world-atlas](https://github.com/topojson/world-atlas),
+* Country names + flags: Natural Earth 1:50m outlines (public domain), ISO codes via `i18n-iso-countries` (MIT), via [world-atlas](https://github.com/topojson/world-atlas),
   simplified to ~0.1° – border crossings and small islands are approximate; oceans/seas use rough boxes.
 
 ## One-time setup (GitHub Pages)

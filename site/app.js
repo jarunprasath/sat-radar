@@ -1,6 +1,7 @@
 // SatRadar UI - Leaflet map + canvas layer + bottom-sheet lists.
 import { loadCatalog, Sky } from './core.js';
 import { loadCountries, regionName, countriesReady } from './geo.js';
+import { GOATCOUNTER_CODE } from './config.js';
 
 const L = window.L;
 const $ = (id) => document.getElementById(id);
@@ -14,7 +15,7 @@ const state = {
   filter: 'all', visible: [], tab: 'close',
   selected: -1, pair: null, track: [], path: [], ticks: [],
   observer: null, skipSameLaunch: true, query: '',
-  lastGround: 0, lastPairs: 0, pairs: [],
+  lastGround: 0, lastPairs: 0, pairs: [], visitors: '',
 };
 
 // ---------------------------------------------------------------- map setup
@@ -367,12 +368,39 @@ function tick(force = false) {
   // lists refresh every 6 s (not every tick) so a tap on a row isn't lost to a re-render
   if (!typing && (force || now - (state.lastPanel || 0) > 6000)) { renderPanel(); state.lastPanel = now.getTime(); }
   const shown = state.visible.reduce((n, i) => n + sky.ok[i], 0);
-  $('status').textContent = `${shown.toLocaleString()} objects shown · elements ${ageText(state.data.gp_fetched)} old · data: CelesTrak · © Arun Prasath J`;
+  $('status').textContent = `${shown.toLocaleString()} objects shown · elements ${ageText(state.data.gp_fetched)} old · data: CelesTrak`
+    + (state.visitors ? ` · 👁 ${state.visitors} visitors` : '') + ' · © Arun Prasath J';
 }
 
 setInterval(() => {
   $('clock').textContent = new Date().toISOString().slice(11, 19) + ' UTC';
 }, 1000);
+
+// ---------------------------------------------------------------- visitor counter
+// Registers this visit with GoatCounter, then reads the site-wide total.
+// Any failure (blocked by an ad blocker, offline, not set up yet) just hides the count.
+function startVisitorCounter() {
+  const code = (GOATCOUNTER_CODE || '').trim();
+  if (!/^[a-z0-9-]+$/i.test(code)) return;
+  const base = `https://${code}.goatcounter.com`;
+  const sc = document.createElement('script');
+  sc.async = true;
+  sc.dataset.goatcounter = `${base}/count`;
+  sc.src = 'https://gc.zgo.at/count.js';
+  document.head.appendChild(sc);
+
+  const read = async (path) => {
+    const r = await fetch(`${base}/counter/${encodeURIComponent(path)}.json`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    if (!j || !j.count) throw new Error('no count');
+    return String(j.count);
+  };
+  const load = () => read('TOTAL').catch(() => read(location.pathname))
+    .then((n) => { state.visitors = n; if (state.sky) tick(true); })
+    .catch(() => {});
+  setTimeout(load, 2500); // give count.js time to register this visit first
+}
 
 async function start() {
   try {
@@ -393,4 +421,5 @@ async function start() {
   }
 }
 
+startVisitorCounter();
 start();

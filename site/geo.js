@@ -19,6 +19,12 @@ export function setCountries(c) { countries = c; } // for tests
 
 export const countriesReady = () => !!countries;
 
+// Flag emoji from an ISO 3166-1 alpha-2 code (two regional-indicator symbols).
+export function flagEmoji(a2) {
+  if (!a2 || !/^[A-Z]{2}$/.test(a2)) return '';
+  return String.fromCodePoint(...[...a2].map((ch) => 0x1f1e6 + ch.charCodeAt(0) - 65));
+}
+
 // even-odd ray casting over all rings of a country (handles holes and multi-polygons)
 function inside(c, lon, lat) {
   let isIn = false;
@@ -45,14 +51,17 @@ export function oceanName(lat, lon) {
   return 'Pacific Ocean';
 }
 
-// Name of the country (or ocean) below lat/lon, in degrees.
+// Name (+ flag) of the country, or the ocean, below lat/lon in degrees.
 export function regionName(lat, lon) {
   lon = ((lon + 540) % 360) - 180;
   if (countries) {
     for (const c of countries) {
       const b = c.b;
       if (lon < b[0] || lon > b[2] || lat < b[1] || lat > b[3]) continue;
-      if (inside(c, lon, lat)) return SHORT[c.n] || c.n;
+      if (inside(c, lon, lat)) {
+        const flag = flagEmoji(c.f);
+        return (SHORT[c.n] || c.n) + (flag ? ' ' + flag : '');
+      }
     }
   }
   return oceanName(lat, lon);
