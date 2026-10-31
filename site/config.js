@@ -5,4 +5,4 @@
 // 2. In GoatCounter: Settings -> tick "Allow adding visitor counts on your website" -> Save
 // 3. Put the code below (just the code, not the full URL) and push.
 // Leave it empty to switch the counter off.
-export const GOATCOUNTER_CODE = '';
+export const GOATCOUNTER_CODE = 'satradar-arun';
