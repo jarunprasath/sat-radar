@@ -3,7 +3,9 @@
 SatRadar - data builder and command-line report.
 
 Data source: CelesTrak (https://celestrak.org), GP orbital elements in the
-OMM-based CSV format and the SATCAT CSV. CSV/OMM is used instead of TLE because
+OMM-based CSV format and the SATCAT CSV. Besides the 'active' satellites, the
+four debris-cloud groups CelesTrak publishes (Fengyun 1C, Cosmos 2251,
+Iridium 33, Cosmos 1408) are downloaded and marked as debris. CSV/OMM is used instead of TLE because
 new objects (catalog number >= 100000) are not available as TLEs.
 
 Usage:
@@ -14,7 +16,8 @@ Usage:
 CelesTrak usage policy (https://celestrak.org/usage-policy.php), respected here:
   * one download attempt per file per run, no retries
   * any non-200 response stops the download step and falls back to the cache
-  * GP data at most every 2 hours, SATCAT at most once per ~20 hours
+  * GP data at most every 2 hours, debris groups every ~6 hours,
+    SATCAT at most once per ~20 hours
 """
 from __future__ import annotations
 
@@ -35,12 +38,17 @@ CACHE_DIR = os.path.join(ROOT, "cache")
 SITE_DATA = os.path.join(ROOT, "site", "data")
 
 GP_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=csv"
+GP_GROUP_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP={group}&FORMAT=csv"
 GP_ONE_URL = "https://celestrak.org/NORAD/elements/gp.php?CATNR={catnr}&FORMAT=csv"
 SATCAT_URL = "https://celestrak.org/pub/satcat.csv"
 USER_AGENT = "SatRadar/1.0 (+https://github.com/jarunprasath/sat-radar)"
 
 GP_MIN_AGE_S = 2 * 3600 - 15 * 60  # ~2 h; 15 min slack for GitHub's cron start jitter
 SATCAT_MIN_AGE_S = 20 * 3600
+DEBRIS_MIN_AGE_S = 6 * 3600 - 15 * 60
+# Debris-cloud groups published by CelesTrak (GP "Debris" section).
+DEBRIS_GROUPS = ["fengyun-1c-debris", "cosmos-2251-debris", "iridium-33-debris",
+                 "cosmos-1408-debris"]
 N_OLDEST = 15
 
 GP_REQUIRED = ["OBJECT_NAME", "OBJECT_ID", "EPOCH", "MEAN_MOTION", "ECCENTRICITY",
@@ -51,11 +59,15 @@ SATCAT_REQUIRED = ["OBJECT_NAME", "OBJECT_ID", "NORAD_CAT_ID", "OBJECT_TYPE",
 
 # Compact row layout shared with site/core.js - keep both in sync.
 FIELDS = ["name", "norad", "cospar", "epoch", "mm", "ecc", "inc", "raan", "argp",
-          "ma", "bstar", "ndot", "nddot", "launch", "owner", "type", "active"]
+          "ma", "bstar", "ndot", "nddot", "launch", "owner", "type", "active", "deb"]
 
 
 class FetchError(RuntimeError):
     pass
+
+
+class FormatError(FetchError):
+    """HTTP 200, but the content is not the expected CSV (e.g. an empty group)."""
 
 
 def log(msg: str) -> None:
@@ -112,7 +124,7 @@ def parse_csv(text: str, required: list[str], what: str) -> list[dict]:
     missing = [c for c in required if c not in cols]
     if missing:
         snippet = text[:200].replace("\n", " | ")
-        raise FetchError(f"{what}: unexpected format, missing columns {missing}. Start: {snippet}")
+        raise FormatError(f"{what}: unexpected format, missing columns {missing}. Start: {snippet}")
     return [row for row in reader]
 
 
@@ -149,7 +161,30 @@ def refresh_cache(force: bool = False) -> list[str]:
     else:
         log("GP cache is fresh, not downloading")
 
-    # 2) SATCAT (launch dates, owners) - at most ~daily
+    # 2) debris-cloud groups - at most every ~6 h
+    deb_cache = read_json(os.path.join(CACHE_DIR, "gp_debris.json"), {})
+    if force or age_s(deb_cache.get("fetched_at")) > DEBRIS_MIN_AGE_S:
+        groups = dict(deb_cache.get("groups", {}))  # keep old data for groups that fail
+        for g in DEBRIS_GROUPS:
+            try:
+                log(f"downloading GP data (GROUP={g}, CSV) ...")
+                rows = parse_csv(fetch(GP_GROUP_URL.format(group=g)), GP_REQUIRED, f"GP {g}")
+                groups[g] = rows
+                log(f"{g}: {len(rows)} objects")
+            except FormatError as e:  # e.g. the cloud has decayed - skip just this group
+                warnings.append(str(e))
+                log(f"WARNING: {e} - skipping {g}")
+            except FetchError as e:
+                warnings.append(str(e))
+                log(f"WARNING: {e} - using cached debris data")
+                return warnings  # stop all further requests after an error (policy)
+            time.sleep(1.0)
+        write_json(os.path.join(CACHE_DIR, "gp_debris.json"),
+                   {"fetched_at": now_utc().isoformat(), "groups": groups})
+    else:
+        log("debris cache is fresh, not downloading")
+
+    # 3) SATCAT (launch dates, owners) - at most ~daily
     sc_cache = read_json(os.path.join(CACHE_DIR, "satcat_slim.json"), {})
     if force or age_s(sc_cache.get("fetched_at")) > SATCAT_MIN_AGE_S:
         try:
@@ -177,7 +212,7 @@ def refresh_cache(force: bool = False) -> list[str]:
             log(f"WARNING: {e} - using cached SATCAT")
             return warnings
 
-        # 3) elements for the oldest on-orbit payloads (most are dead, so not in 'active')
+        # 4) elements for the oldest on-orbit payloads (most are dead, so not in 'active')
         gp = read_json(os.path.join(CACHE_DIR, "gp_active.json"), {})
         active_ids = {r["NORAD_CAT_ID"].strip() for r in gp.get("rows", [])}
         extras = []
@@ -209,14 +244,14 @@ def _num(v: str) -> float:
         return 0.0
 
 
-def to_row(r: dict, meta: dict, active: int) -> list:
+def to_row(r: dict, meta: dict, active: int, deb: int = 0) -> list:
     n = r["NORAD_CAT_ID"].strip()
     launch, owner, otype = meta.get(n, ["", "", ""])
     return [r["OBJECT_NAME"].strip(), int(n), r["OBJECT_ID"].strip(), r["EPOCH"].strip(),
             _num(r["MEAN_MOTION"]), _num(r["ECCENTRICITY"]), _num(r["INCLINATION"]),
             _num(r["RA_OF_ASC_NODE"]), _num(r["ARG_OF_PERICENTER"]), _num(r["MEAN_ANOMALY"]),
             _num(r["BSTAR"]), _num(r["MEAN_MOTION_DOT"]), _num(r["MEAN_MOTION_DDOT"]),
-            launch, owner, otype or "PAY", active]
+            launch, owner, otype or ("DEB" if deb else "PAY"), active, deb]
 
 
 def build_site_data(warnings: list[str]) -> dict:
@@ -240,11 +275,22 @@ def build_site_data(warnings: list[str]) -> dict:
             continue
         seen.add(n)
         rows.append(to_row(r, meta, 0))
+    deb = read_json(os.path.join(CACHE_DIR, "gp_debris.json"), {})
+    n_deb = 0
+    for grp_rows in deb.get("groups", {}).values():
+        for r in grp_rows:
+            n = r["NORAD_CAT_ID"].strip()
+            if n in seen:
+                continue
+            seen.add(n)
+            rows.append(to_row(r, meta, 0, deb=1))
+            n_deb += 1
 
     data = {
         "generated": now_utc().isoformat(timespec="seconds"),
         "gp_fetched": gp.get("fetched_at"),
         "satcat_fetched": sc.get("fetched_at"),
+        "debris_fetched": deb.get("fetched_at"),
         "source": "CelesTrak GP (OMM CSV) + SATCAT - https://celestrak.org",
         "warnings": warnings,
         "fields": FIELDS,
@@ -252,7 +298,7 @@ def build_site_data(warnings: list[str]) -> dict:
         "sats": rows,
     }
     write_json(os.path.join(SITE_DATA, "sats.json"), data)
-    log(f"wrote site/data/sats.json ({len(rows)} objects)")
+    log(f"wrote site/data/sats.json ({len(rows)} objects, {n_deb} debris)")
     return data
 
 

@@ -1,12 +1,20 @@
 // SatRadar UI - Leaflet map + canvas layer + bottom-sheet lists.
 import { loadCatalog, Sky } from './core.js';
-import { loadCountries, regionName, countriesReady } from './geo.js';
+import { loadCountries, regionName, countriesReady, getCountries } from './geo.js';
+import { Globe } from './globe.js';
 import { GOATCOUNTER_CODE } from './config.js';
 
 const L = window.L;
 const $ = (id) => document.getElementById(id);
 const COLORS = {
-  LEO: '#38bdf8', MEO: '#a78bfa', GEO: '#fbbf24', HEO: '#f472b6', old: '#94a3b8',
+  LEO: '#38bdf8', MEO: '#a78bfa', GEO: '#fbbf24', HEO: '#f472b6', old: '#94a3b8', deb: '#ef4444',
+};
+const RADII = [100, 200, 500, 1000, 2000]; // km, "Above me" range options (0 = whole sky)
+const colorOf = (s) => (s.deb ? COLORS.deb : s.active ? COLORS[s.cls] : COLORS.old);
+// Small per-browser memory (last location, radius, view). Never required - private mode etc. just forget.
+const store = {
+  get(k) { try { return JSON.parse(localStorage.getItem('satradar.' + k)); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem('satradar.' + k, JSON.stringify(v)); } catch { /* ignore */ } },
 };
 const STATION_RE = /\b(ISS|TIANGONG|CSS|TIANHE|WENTIAN|MENGTIAN)\b/i;
 
@@ -16,7 +24,14 @@ const state = {
   selected: -1, pair: null, track: [], path: [], ticks: [],
   observer: null, skipSameLaunch: true, query: '',
   lastGround: 0, lastPairs: 0, pairs: [], visitors: '',
+  view: '2d', radius: 200, near: [], picking: false, locMsg: '',
+  placeQ: '', placeHits: null, latQ: '', lonQ: '',
 };
+{
+  const r = store.get('radius'); if (r === 0 || RADII.includes(r)) state.radius = r;
+  const o = store.get('observer');
+  if (o && Number.isFinite(o.lat) && Number.isFinite(o.lon)) state.observer = { lat: o.lat, lon: o.lon, h: 0, label: String(o.label || 'Saved location') };
+}
 
 // ---------------------------------------------------------------- map setup
 const map = L.map('map', {
@@ -47,7 +62,15 @@ function wrapLon(lon, centerLon) {
   return lon + 360 * Math.round((centerLon - lon) / 360);
 }
 
+// Satellites drawn right now: in "Above me" with a location set, only those near the observer.
+function shownIndices() {
+  if (aboveMode()) return state.near.map((o) => o.i);
+  return state.visible;
+}
+const aboveMode = () => state.tab === 'over' && !!state.observer;
+
 function draw() {
+  if (state.view === '3d') return drawGlobe();
   const sky = state.sky;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -58,13 +81,12 @@ function draw() {
   const size = map.getSize();
   // batch per colour - much faster than one path per point
   const buckets = {};
-  for (const i of state.visible) {
+  for (const i of shownIndices()) {
     if (!sky.ok[i]) continue;
     const s = state.sats[i];
     const p = map.latLngToContainerPoint([sky.lat[i], wrapLon(sky.lon[i], c)]);
     if (p.x < -5 || p.y < -5 || p.x > size.x + 5 || p.y > size.y + 5) continue;
-    const col = s.active ? COLORS[s.cls] : COLORS.old;
-    (buckets[col] ||= []).push(p);
+    (buckets[colorOf(s)] ||= []).push(p);
   }
   for (const [col, pts] of Object.entries(buckets)) {
     ctx.fillStyle = col; ctx.globalAlpha = 0.85; ctx.beginPath();
@@ -111,7 +133,8 @@ function draw() {
   }
   if (state.observer) {
     const p = map.latLngToContainerPoint([state.observer.lat, wrapLon(state.observer.lon, c)]);
-    ctx.fillStyle = '#f87171'; ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, 6.2832); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, 6.2832); ctx.fill();
+    ring(p, '#f87171');
   }
 }
 
@@ -125,10 +148,11 @@ map.on('resize', resizeCanvas);
 
 // Tap on the map: pick the nearest satellite within 22 px.
 map.on('click', (ev) => {
+  if (state.picking) return setObserver(ev.latlng.lat, ev.latlng.lng, null, 'pick');
   const sky = state.sky; if (!sky) return;
   const c = map.getCenter().lng;
   let best = -1, bestD = 22 * 22;
-  for (const i of state.visible) {
+  for (const i of shownIndices()) {
     if (!sky.ok[i]) continue;
     const p = map.latLngToContainerPoint([sky.lat[i], wrapLon(sky.lon[i], c)]);
     const d = (p.x - ev.containerPoint.x) ** 2 + (p.y - ev.containerPoint.y) ** 2;
@@ -146,11 +170,13 @@ function applyFilter() {
   const f = state.filter;
   state.visible = [];
   state.sats.forEach((s, i) => {
-    let ok = true;
-    if (['LEO', 'MEO', 'GEO', 'HEO'].includes(f)) ok = s.cls === f;
-    else if (f === 'starlink') ok = /STARLINK/i.test(s.name);
-    else if (f === 'nostarlink') ok = !/STARLINK/i.test(s.name);
-    else if (f === 'stations') ok = STATION_RE.test(s.name);
+    let ok = !s.deb; // debris only appears with the two debris filters
+    if (f === 'debris') ok = s.deb;
+    else if (f === 'alldeb') ok = true;
+    else if (['LEO', 'MEO', 'GEO', 'HEO'].includes(f)) ok = ok && s.cls === f;
+    else if (f === 'starlink') ok = ok && /STARLINK/i.test(s.name);
+    else if (f === 'nostarlink') ok = ok && !/STARLINK/i.test(s.name);
+    else if (f === 'stations') ok = ok && STATION_RE.test(s.name);
     if (ok) state.visible.push(i);
   });
   state.lastPairs = 0;
@@ -166,7 +192,8 @@ function select(i, fly = true, pair = null) {
   if (!countriesReady()) {
     loadCountries().then(() => { computePath(); renderCard(); draw(); }).catch(() => {});
   }
-  if (fly && sky.ok[i]) map.flyTo([sky.lat[i], wrapLon(sky.lon[i], map.getCenter().lng)], Math.max(map.getZoom(), 3), { duration: 0.8 });
+  if (fly && sky.ok[i]) focusOn(sky.lat[i], sky.lon[i]);
+  if (!countriesReady() && state.view === '3d') loadCountries().then(draw).catch(() => {});
   renderCard(); draw();
 }
 
@@ -205,9 +232,9 @@ function renderCard() {
   const oldChips = card.querySelector('.chips');
   const scrollX = oldChips ? oldChips.scrollLeft : 0;
   card.innerHTML = `
-    <h3><span style="color:${s.active ? COLORS[s.cls] : COLORS.old}">●</span>${esc(s.name)}
+    <h3><span style="color:${colorOf(s)}">●</span>${esc(s.name)}
       <button aria-label="Close" id="cardx">×</button></h3>
-    <p class="note" style="margin:0 0 6px">NORAD ${s.norad} · ${esc(s.cospar)} · ${esc(s.owner || '?')} · launched ${esc(s.launch || '?')}${s.active ? '' : ' · inactive'}</p>
+    <p class="note" style="margin:0 0 6px">NORAD ${s.norad} · ${esc(s.cospar)} · ${esc(s.owner || '?')} · launched ${esc(s.launch || '?')}${s.deb ? ' · <b style="color:var(--deb)">debris</b>' : s.active ? '' : ' · inactive'}</p>
     <p class="over">Now over ≈ <b>${esc(regionName(k.lat[i], k.lon[i]))}</b> <span class="muted">· ${new Date().toISOString().slice(11, 19)} UTC</span></p>
     <dl>
       <div><dt>Altitude</dt><dd>${fmt(k.alt[i])} km</dd></div>
@@ -235,12 +262,12 @@ function pathHtml(s) {
 
 $('card').addEventListener('click', (e) => {
   const c = e.target.closest('.chip'); if (!c) return;
-  map.flyTo([Number(c.dataset.lat), wrapLon(Number(c.dataset.lon), map.getCenter().lng)], Math.max(map.getZoom(), 3), { duration: 0.8 });
+  focusOn(Number(c.dataset.lat), Number(c.dataset.lon));
 });
 
 function row(i, val, sub, attrs = '') {
   const s = state.sats[i];
-  return `<div class="row" data-i="${i}" ${attrs}><div class="name">${esc(s.name)}${s.active ? '' : '<span class="tag">inactive</span>'}</div>
+  return `<div class="row" data-i="${i}" ${attrs}><div class="name">${esc(s.name)}${s.deb ? '<span class="tag deb">debris</span>' : s.active ? '' : '<span class="tag">inactive</span>'}</div>
     <div class="val">${val}</div><div class="sub">${sub}</div></div>`;
 }
 
@@ -280,15 +307,7 @@ function renderPanel() {
       html += row(i, esc(s.launch), `${esc(s.owner || '?')} · ${s.cls} · alt ${fmt(sky.alt[i])} km · NORAD ${s.norad}`);
     }
   } else if (t === 'over') {
-    if (!state.observer) {
-      html += `<p class="note">Shows satellites more than 10° above your horizon right now. Your location stays in this browser — it is not sent anywhere.</p>
-        <button class="btn" id="locate">Use my location</button>`;
-    } else {
-      const ov = sky.overhead(vis, state.observer, 10, 60);
-      html += `<p class="note">${ov.length} satellites above 10° at ${fmt(state.observer.lat, 2)}, ${fmt(state.observer.lon, 2)}. Most are too faint to see by eye.</p>`;
-      const dir = (az) => ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(az / 45) % 8];
-      for (const o of ov) html += row(o.i, `${fmt(o.el)}° ${dir(o.az)}`, `elevation ${fmt(o.el, 1)}°, azimuth ${fmt(o.az)}°, range ${fmt(o.range)} km`);
-    }
+    html += overHtml();
   } else if (t === 'find') {
     const q = state.query.trim().toUpperCase();
     html += `<div class="field"><input type="search" id="q" placeholder="Name or NORAD id, e.g. ISS, METOP, 25544" value="${esc(state.query)}" autocomplete="off"></div>`;
@@ -304,8 +323,142 @@ function renderPanel() {
   if (keepFocus) { const q = $('q'); q.focus(); q.setSelectionRange(caret, caret); }
 }
 
+// ---------------------------------------------------------------- "Above me"
+const dir8 = (az) => ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(az / 45) % 8];
+
+function overHtml() {
+  const sky = state.sky, o = state.observer;
+  if (!o) {
+    let h = `<p class="note">Choose your location to see what is passing over you. It stays in this browser and is not sent to this site.</p>
+      <button class="btn" id="locate">📍 Use my location</button>
+      ${state.locMsg ? `<p class="warn">${esc(state.locMsg)}</p>` : ''}
+      <div class="sec">…or search a place</div>
+      <div class="field"><input type="text" id="place" placeholder="Town or place, e.g. Darmstadt, Madurai" value="${esc(state.placeQ)}" autocomplete="off" enterkeyhint="search">
+        <button class="btn2" id="placeGo">Find</button></div>`;
+    if (state.placeHits === 'busy') h += '<p class="muted">Searching…</p>';
+    else if (typeof state.placeHits === 'string') h += `<p class="warn">${esc(state.placeHits)}</p>`;
+    else if (state.placeHits) {
+      if (!state.placeHits.length) h += '<p class="muted">No place found - try another spelling, or enter latitude / longitude below.</p>';
+      state.placeHits.forEach((p, k) => { h += `<button class="hit" data-hit="${k}">${esc(p.label)}<div class="muted" style="font-size:11px">${fmt(p.lat, 3)}, ${fmt(p.lon, 3)}</div></button>`; });
+      h += '<p class="note" style="font-size:10px">Place search: Nominatim · © OpenStreetMap contributors</p>';
+    }
+    h += `<div class="sec">…or enter coordinates (decimal degrees)</div>
+      <div class="field"><input type="text" class="ll" id="olat" inputmode="decimal" placeholder="Latitude  49.87" value="${esc(state.latQ)}">
+        <input type="text" class="ll" id="olon" inputmode="decimal" placeholder="Longitude  8.65" value="${esc(state.lonQ)}">
+        <button class="btn2" id="llGo">Set</button></div>
+      <div class="sec">…or tap the map</div>
+      <button class="btn2 ${state.picking ? 'on' : ''}" id="pick">${state.picking ? 'Now tap your location on the map / globe…' : '🗺 Pick on map'}</button>`;
+    return h;
+  }
+  const opts = RADII.map((r) => `<option value="${r}" ${state.radius === r ? 'selected' : ''}>${fmt(r)} km</option>`).join('')
+    + `<option value="0" ${state.radius === 0 ? 'selected' : ''}>whole sky (≥10° up)</option>`;
+  let h = `<div class="obs">📍<div class="lbl"><b>${esc(o.label)}</b><div class="muted" style="font-size:11px">${fmt(o.lat, 3)}, ${fmt(o.lon, 3)}</div></div>
+      <button class="btn2" id="obsChange">Change</button></div>
+    <div class="field"><label class="chk" style="font-size:13px">Show within <select id="radius">${opts}</select> of me</label></div>`;
+  const n = state.near.length;
+  h += state.radius
+    ? `<p class="note">${fmt(n)} object${n === 1 ? '' : 's'} whose ground point is within ${fmt(state.radius)} km of you (current filter). Only these are drawn on the map. Most are too faint to see by eye; geostationary satellites stay over the equator, so pick “whole sky” to see them.</p>`
+    : `<p class="note">${fmt(n)} object${n === 1 ? '' : 's'} more than 10° above your horizon (current filter). Only these are drawn on the map. Most are too faint to see by eye.</p>`;
+  for (const v of state.near.slice(0, 100)) {
+    h += row(v.i, `${fmt(v.el)}° ${dir8(v.az)}`,
+      `${v.dist !== undefined ? `${fmt(v.dist)} km away · ` : ''}alt ${fmt(sky.alt[v.i])} km · elevation ${fmt(v.el, 1)}°, azimuth ${fmt(v.az)}° · range ${fmt(v.range)} km`);
+  }
+  if (n > 100) h += `<p class="muted">…and ${fmt(n - 100)} more on the map. Choose a smaller range or a filter to narrow it down.</p>`;
+  return h;
+}
+
+function computeNear() {
+  const sky = state.sky;
+  if (!aboveMode() || !sky || !sky.time) { state.near = []; return; }
+  state.near = state.radius
+    ? sky.nearby(state.visible, state.observer, state.radius)
+    : sky.overhead(state.visible, state.observer, 10, 0);
+}
+
+// Show the observer's area: the radius circle on the 2D map, or the globe turned towards it.
+let circle = null;
+function updateObserverView(zoom = false) {
+  if (circle) { circle.remove(); circle = null; }
+  if (!aboveMode()) return;
+  const o = state.observer;
+  const km = state.radius || 2500; // whole sky: frame roughly the LEO horizon
+  if (state.radius && state.view === '2d') {
+    circle = L.circle([o.lat, o.lon], { radius: km * 1000, color: '#f87171', weight: 1.5, dashArray: '4 4', fill: true, fillOpacity: 0.05, interactive: false }).addTo(map);
+  }
+  if (!zoom) return;
+  if (state.view === '3d') globe.centerOn(o.lat, o.lon, Math.max(3, km / 111 * 1.6));
+  else map.fitBounds(L.latLng(o.lat, o.lon).toBounds(km * 2000 * 1.2), { maxZoom: 9 });
+}
+
+function setObserver(lat, lon, label, src) {
+  lat = Number(lat); lon = Number(lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90) return false;
+  lon = ((lon + 540) % 360) - 180;
+  state.picking = false; setPickCursor();
+  state.locMsg = ''; state.placeHits = null;
+  const obs = { lat, lon, h: 0, label: label || (countriesReady() ? regionName(lat, lon) : 'Chosen point'), src };
+  state.observer = obs;
+  store.set('observer', { lat, lon, label: obs.label });
+  if (!label && !countriesReady()) { // name the spot once the country outlines have loaded
+    loadCountries().then(() => {
+      if (state.observer !== obs) return;
+      obs.label = regionName(lat, lon); store.set('observer', { lat, lon, label: obs.label }); renderPanel();
+    }).catch(() => {});
+  }
+  if (state.tab !== 'over') selectTab('over');
+  computeNear(); updateObserverView(true); renderPanel(); draw(); updateStatus();
+  return true;
+}
+
+function setPickCursor() {
+  $('map').classList.toggle('picking', state.picking);
+  $('globe').classList.toggle('picking', state.picking);
+}
+
+async function findPlace() {
+  const q = state.placeQ.trim(); if (!q) return;
+  state.placeHits = 'busy'; renderPanel();
+  try {
+    // Nominatim (OpenStreetMap) search: one request per button press, as its usage policy asks.
+    const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&q=' + encodeURIComponent(q);
+    const r = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    state.placeHits = (Array.isArray(j) ? j : []).map((p) => ({
+      lat: Number(p.lat), lon: Number(p.lon),
+      label: String(p.display_name || q).split(',').slice(0, 3).join(',').trim(),
+    })).filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon));
+  } catch (e) {
+    state.placeHits = `Place search is not reachable right now (${e.message}). Enter latitude / longitude below instead.`;
+  }
+  renderPanel();
+}
+
 $('panel').addEventListener('click', (e) => {
-  if (e.target.id === 'locate') return locate();
+  const id = e.target.id;
+  if (id === 'locate') return locate();
+  if (id === 'placeGo') return findPlace();
+  if (id === 'llGo') {
+    if (!setObserver(state.latQ.replace(',', '.'), state.lonQ.replace(',', '.'), null, 'manual')) {
+      state.locMsg = 'Please enter latitude (−90 … 90) and longitude (−180 … 180) as decimal numbers, e.g. 49.87 and 8.65.';
+      renderPanel();
+    }
+    return;
+  }
+  if (id === 'pick') {
+    state.picking = !state.picking; setPickCursor(); renderPanel();
+    if (state.picking && $('sheet').dataset.state === 'full') $('sheet').dataset.state = 'half';
+    return;
+  }
+  if (id === 'obsChange') {
+    state.observer = null; state.near = []; updateObserverView(); renderPanel(); draw(); updateStatus(); return;
+  }
+  const hit = e.target.closest('.hit');
+  if (hit && Array.isArray(state.placeHits)) {
+    const p = state.placeHits[Number(hit.dataset.hit)];
+    if (p) setObserver(p.lat, p.lon, p.label, 'place');
+    return;
+  }
   const r = e.target.closest('.row'); if (!r) return;
   if (r.dataset.pair) {
     const [a, b] = r.dataset.pair.split(',').map(Number);
@@ -313,33 +466,138 @@ $('panel').addEventListener('click', (e) => {
   } else select(Number(r.dataset.i));
 });
 $('panel').addEventListener('input', (e) => {
-  if (e.target.id === 'q') { state.query = e.target.value; renderPanel(); }
+  const id = e.target.id;
+  if (id === 'q') { state.query = e.target.value; renderPanel(); }
+  else if (id === 'place') state.placeQ = e.target.value;
+  else if (id === 'olat') state.latQ = e.target.value;
+  else if (id === 'olon') state.lonQ = e.target.value;
+});
+$('panel').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  if (e.target.id === 'place') { e.preventDefault(); findPlace(); }
+  if (e.target.id === 'olat' || e.target.id === 'olon') { e.preventDefault(); $('llGo').click(); }
 });
 $('panel').addEventListener('change', (e) => {
   if (e.target.id === 'samel') { state.skipSameLaunch = e.target.checked; state.lastPairs = 0; tick(true); }
+  if (e.target.id === 'radius') {
+    state.radius = Number(e.target.value); store.set('radius', state.radius);
+    computeNear(); updateObserverView(true); renderPanel(); draw(); updateStatus();
+  }
 });
+
+function selectTab(tab) {
+  const was = aboveMode();
+  state.tab = tab;
+  for (const x of $('tabs').children) x.classList.toggle('on', x.dataset.tab === tab);
+  if ($('sheet').dataset.state === 'min') $('sheet').dataset.state = 'half';
+  if (tab !== 'over' && state.picking) { state.picking = false; setPickCursor(); }
+  computeNear();
+  if (aboveMode() !== was) updateObserverView(aboveMode());
+  renderPanel(); draw(); updateStatus();
+}
 $('tabs').addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b) return;
-  state.tab = b.dataset.tab;
-  for (const x of $('tabs').children) x.classList.toggle('on', x === b);
-  if ($('sheet').dataset.state === 'min') $('sheet').dataset.state = 'half';
-  renderPanel();
+  selectTab(b.dataset.tab);
+});
+// Header search button - also reachable on desktop, where the tab row may be cut off.
+$('searchBtn').addEventListener('click', () => {
+  selectTab('find');
+  const q = $('q'); if (q) q.focus();
 });
 $('handle').addEventListener('click', () => {
   const s = $('sheet');
   s.dataset.state = { half: 'full', full: 'min', min: 'half' }[s.dataset.state];
 });
 $('filter').addEventListener('change', (e) => {
-  state.filter = e.target.value; applyFilter(); tick(true);
+  state.filter = e.target.value; applyFilter(); computeNear(); tick(true);
 });
 
 function locate() {
-  if (!navigator.geolocation) { alert('Geolocation is not available in this browser.'); return; }
+  const fail = (msg) => { state.locMsg = msg; renderPanel(); };
+  if (!navigator.geolocation) return fail('Location is not available in this browser - search a place or enter coordinates below.');
+  state.locMsg = 'Asking the browser for your location…'; renderPanel();
   navigator.geolocation.getCurrentPosition(
-    (p) => { state.observer = { lat: p.coords.latitude, lon: p.coords.longitude, h: (p.coords.altitude || 0) / 1000 }; renderPanel(); draw(); },
-    (err) => alert('Could not get your location: ' + err.message),
+    (p) => { setObserver(p.coords.latitude, p.coords.longitude, 'My location', 'gps'); },
+    (err) => fail(err.code === 1
+      ? 'Location access is blocked for this page. Search a place or enter coordinates below instead.'
+      : `Could not get your location (${err.message}). Search a place or enter coordinates below instead.`),
     { enableHighAccuracy: false, timeout: 15000 },
   );
+}
+
+// ---------------------------------------------------------------- 3D globe
+const globe = new Globe($('globe'), {
+  onRedraw: () => drawGlobe(),
+  onPick: (x, y) => {
+    if (state.picking) { const g = globe.unproject(x, y); if (g) setObserver(g.lat, g.lon, null, 'pick'); return; }
+    let best = -1, bestD = 22 * 22;
+    for (const p of globePoints) {
+      if (!p.vis) continue;
+      const d = (p.sx - x) ** 2 + (p.sy - y) ** 2;
+      if (d < bestD) { bestD = d; best = p.i; }
+    }
+    if (best >= 0) select(best, false); else clearSelection();
+  },
+});
+let globePoints = [];
+
+// Part of the screen not covered by the header and the panel - the globe is centred there.
+function freeArea() {
+  const w = window.innerWidth, h = window.innerHeight;
+  const top = $('legend').getBoundingClientRect().top - 4;
+  const sh = $('sheet').getBoundingClientRect();
+  if (w >= 900) return { left: sh.right, right: w, top, bottom: h };
+  return { left: 0, right: w, top, bottom: Math.max(top + 120, sh.top) };
+}
+
+function drawGlobe() {
+  const sky = state.sky; if (!sky || !sky.time) return;
+  globe.setFrame(window.innerWidth, window.innerHeight, freeArea());
+  globePoints = [];
+  for (const i of shownIndices()) {
+    if (!sky.ok[i]) continue;
+    globePoints.push({ i, lat: sky.lat[i], lon: sky.lon[i], alt: sky.alt[i], col: colorOf(state.sats[i]) });
+  }
+  const sel = state.selected >= 0 && sky.ok[state.selected]
+    ? { lat: sky.lat[state.selected], lon: sky.lon[state.selected], alt: sky.alt[state.selected], name: state.sats[state.selected].name } : null;
+  const pb = state.pair && state.pair[1];
+  globe.draw({
+    countries: getCountries(), points: globePoints, track: state.track,
+    ticks: state.ticks.map((t) => ({ lat: t.lat, lon: t.lon, text: `${hhmm(t.t)} ${t.name}` })),
+    observer: state.observer, radiusKm: aboveMode() ? state.radius : 0, selected: sel,
+    pair: sel && state.pair ? { lat: sky.lat[pb], lon: sky.lon[pb], alt: sky.alt[pb] } : null,
+  });
+}
+
+function setView(v) {
+  state.view = v; store.set('view', v);
+  const is3d = v === '3d';
+  $('globe').hidden = !is3d; $('gctl').hidden = !is3d;
+  $('map').classList.toggle('off', is3d);
+  $('viewBtn').textContent = is3d ? '2D' : '3D';
+  $('viewBtn').title = is3d ? 'Back to the flat map' : '3D globe';
+  $('viewBtn').classList.toggle('on', is3d);
+  if (is3d) {
+    const c = map.getCenter();
+    globe.centerOn(c.lat, c.lng);
+    if (!countriesReady()) loadCountries().then(draw).catch(() => {});
+  } else {
+    map.invalidateSize();
+    map.setView([globe.lat0, globe.lon0], map.getZoom(), { animate: false });
+  }
+  updateObserverView(false);
+  draw();
+}
+$('viewBtn').addEventListener('click', () => setView(state.view === '3d' ? '2d' : '3d'));
+$('gzin').addEventListener('click', () => { globe.zoomBy(1.4); draw(); });
+$('gzout').addEventListener('click', () => { globe.zoomBy(1 / 1.4); draw(); });
+window.addEventListener('resize', () => { if (state.view === '3d') draw(); });
+new ResizeObserver(() => { if (state.view === '3d') draw(); }).observe($('sheet'));
+
+// Move the view to a point (2D map or 3D globe).
+function focusOn(lat, lon) {
+  if (state.view === '3d') { globe.centerOn(lat, lon); draw(); return; }
+  map.flyTo([lat, wrapLon(lon, map.getCenter().lng)], Math.max(map.getZoom(), 3), { duration: 0.8 });
 }
 
 // ---------------------------------------------------------------- main loop
@@ -359,15 +617,22 @@ function tick(force = false) {
     state.pairs = sky.closestPairs(state.visible, { limit: 40, maxKm: 50, skipSameLaunch: state.skipSameLaunch });
     state.lastPairs = now.getTime();
   }
+  computeNear();
   if (state.selected >= 0) {
     renderCard();
     if (state.track.length && now - state.trackAt > 60000) select(state.selected, false, state.pair);
   }
   draw();
-  const typing = document.activeElement && document.activeElement.id === 'q';
+  const ae = document.activeElement;
+  const typing = ae && $('panel').contains(ae) && /^(INPUT|SELECT)$/.test(ae.tagName);
   // lists refresh every 6 s (not every tick) so a tap on a row isn't lost to a re-render
   if (!typing && (force || now - (state.lastPanel || 0) > 6000)) { renderPanel(); state.lastPanel = now.getTime(); }
-  const shown = state.visible.reduce((n, i) => n + sky.ok[i], 0);
+  updateStatus();
+}
+
+function updateStatus() {
+  const sky = state.sky; if (!sky || !sky.time) return;
+  const shown = shownIndices().reduce((n, i) => n + sky.ok[i], 0);
   $('status').textContent = `${shown.toLocaleString()} objects shown · elements ${ageText(state.data.gp_fetched)} old · data: CelesTrak`
     + (state.visitors ? ` · 👁 ${state.visitors} visitors` : '') + ' · © Arun Prasath J';
 }
@@ -412,6 +677,7 @@ async function start() {
     applyFilter();
     resizeCanvas();
     tick(true);
+    if (store.get('view') === '3d') setView('3d');
     setInterval(() => tick(false), 2000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(true); });
     if (state.data.warnings && state.data.warnings.length) console.warn('Data warnings:', state.data.warnings);

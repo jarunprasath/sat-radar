@@ -31,7 +31,7 @@ export function loadCatalog(data) {
       name: r[f.name], norad: r[f.norad], cospar,
       launchKey: cospar.slice(0, 8), // "YYYY-NNN" = one launch
       launch: r[f.launch] || '', owner: r[f.owner] || '', type: r[f.type] || '',
-      active: !!r[f.active], epoch: r[f.epoch],
+      active: !!r[f.active], deb: f.deb !== undefined && !!r[f.deb], epoch: r[f.epoch],
       period: 1440 / r[f.mm], inc: r[f.inc],
       cls: orbitClass(r[f.mm], r[f.ecc]), satrec,
     });
@@ -142,7 +142,25 @@ export class Sky {
       if (el >= minElevDeg) out.push({ i, el, az: (la.azimuth / D2R + 360) % 360, range: la.rangeSat });
     }
     out.sort((a, b) => b.el - a.el);
-    return out.slice(0, limit);
+    return limit ? out.slice(0, limit) : out;
+  }
+
+  // Objects whose sub-point (the spot on Earth right below them) is within radiusKm of the
+  // observer, nearest first, with the look angles from the observer. limit 0 = all.
+  nearby(indices, observer, radiusKm, limit = 0) {
+    const gmst = S.gstime(this.time);
+    const obs = { latitude: observer.lat * D2R, longitude: observer.lon * D2R, height: observer.h || 0 };
+    const out = [];
+    for (const i of indices) {
+      if (!this.ok[i]) continue;
+      const dist = haversineKm(observer.lat, observer.lon, this.lat[i], this.lon[i]);
+      if (dist > radiusKm) continue;
+      const p = { x: this.eci[3 * i], y: this.eci[3 * i + 1], z: this.eci[3 * i + 2] };
+      const la = S.ecfToLookAngles(obs, S.eciToEcf(p, gmst));
+      out.push({ i, dist, el: la.elevation / D2R, az: (la.azimuth / D2R + 360) % 360, range: la.rangeSat });
+    }
+    out.sort((a, b) => a.dist - b.dist);
+    return limit ? out.slice(0, limit) : out;
   }
 
   // Ground track: list of [lat, lon, timeMs] from -back to +ahead minutes around now.

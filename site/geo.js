@@ -18,6 +18,7 @@ export function loadCountries(url = 'vendor/countries.json') {
 export function setCountries(c) { countries = c; } // for tests
 
 export const countriesReady = () => !!countries;
+export const getCountries = () => countries;
 
 // Flag emoji from an ISO 3166-1 alpha-2 code (two regional-indicator symbols).
 export function flagEmoji(a2) {
